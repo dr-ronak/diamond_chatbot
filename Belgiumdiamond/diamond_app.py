@@ -7,6 +7,7 @@ from io import BytesIO
 from datetime import datetime
 from pandas.api.types import CategoricalDtype
 import os
+import re
 
 # Initialize Cohere API
 COHERE_API_KEY = os.getenv("COHERE_API_KEY", "RJ0sqkX4xHHilGex3Jtu2ewvj8sdQAwAUE6FNQ2H")
@@ -49,19 +50,16 @@ def process_query(query, data):
                 break
 
         if column_name:  # If the column is found
-            unique_values = data[column_name].unique()
-            unique_count = len(unique_values)
-
-            #Create Dataframe 
-            unique_df = pd.DataFrame({column_name: unique_values})
-
-            return {"type": "combined",
-                    "text":f"There are {unique_count} unique values in {column_name}",
-                    "table": unique_df
+            unique_values = data[column_name].nunique()
+            return {"type": "test",
+                    "data":f"The {column_name} column has {unique_values} unique values .",
                     }
 
-        else:  # If the column is not found
-            return {"type": "text", "data": "Sorry, the specified column is not available in the dataset."}
+        else:  # If the column is not found, return unique values for whole dataset
+            unique_summary = data.nunique().reset_index()
+            unique_summary.columns = ["Columns", "Unique Values"]
+
+            return {"type": "table", "data": unique_summary}
 
     # If user asks for the number of rows in the dataset
     elif "rows" in query or "records" in query:
@@ -72,10 +70,10 @@ def process_query(query, data):
     elif "not null" in query or "not missing" in query or "no null" in query or "no missing" in query:
         column_name = None
         for col in data.columns:
-            # Check if the column name is exactly the same as in the query (case-insensitive)
-            if col.lower() == query.lower().split(' ')[-3]:  # Attempt to match last part of query for column name
+            # Check if the column name contains the term from the query (case-insensitive)
+            if col.lower() in query.lower():  # Try matching part of the query with the column name
                 column_name = col
-                break  # Stop once we find the exact column name
+                break  # Stop once we find a match
 
         if column_name:  # If a column is found
             # Get the count of non-null values in the selected column
@@ -89,85 +87,220 @@ def process_query(query, data):
         else:
             return {"type": "text", "data": "Sorry, the specified column is not available in the dataset."}
 
-    # If user asks for missing values in a column
+    elif "how many" in query and "where" in query:
+        query_lower = query.lower()
+
+        # Extract column name dynamically
+        match = re.search(r'where\s+"?([\w\s]+?)"?\s+is', query_lower)  # Finds column name
+        column_name = match.group(1).strip() if match else None
+
+        # Extract category value dynamically
+        match_value = re.search(r'"(.*?)"', query)  # Finds value inside quotes
+        category_value = match_value.group(1).strip() if match_value else None
+
+        if column_name and category_value and column_name in data.columns:
+            # Count occurrences where the column matches the category value
+            count = data[data[column_name].str.lower() == category_value.lower()].shape[0]
+
+            return {
+                "type": "text",
+                "data": f"There are {count} records where '{column_name}' is '{category_value}'."
+            }
+        else:
+            return {"type": "text", "data": "Sorry, the specified column or value is not available in the dataset."}
+        
+    # Handle missing/null values query
     elif "missing" in query or "null" in query:
         column_name = None
+        
+        # Check if the user is asking about a specific column
         for col in data.columns:
             if col.lower() in query:
                 column_name = col
                 break
 
-        if column_name:  # If the column is found
-            # Get missing values for the specific column
+        if column_name:  
+            # If a specific column is found, return missing values for that column
             missing_values = data[column_name].isnull().sum()
-            
-            # Create a DataFrame for the response (return as a table)
             missing_data = pd.DataFrame({'Column': [column_name], 'Missing Values': [missing_values]})
-            
-            # Return a table response
             return {"type": "table", "data": missing_data}
-        else:  # If the column is not found
-            return {"type": "text", "data": "Sorry, the specified column is not available in the dataset."}
+        
+        else:
+            # If no specific column is mentioned, return missing values for the whole dataset
+            missing_summary = data.isnull().sum().reset_index()
+            missing_summary.columns = ["Column", "Missing Values"]
+            missing_summary = missing_summary[missing_summary["Missing Values"] > 0]  # Filter columns with missing values
+            
+            if not missing_summary.empty:
+                return {"type": "table", "data": missing_summary}
+            else:
+                return {"type": "text", "data": "There are no missing values in the dataset."}
+
+   # If user asks for summary statistics of all columns or specific column
+    elif "summary" in query or "statistics" in query:
+        if "date" in query:  # If user specifies they want date columns' summary
+            date_columns = [col for col in data.columns if "date" in col.lower()]
+            if date_columns:
+                date_summary = {}
+                for col in date_columns:
+                    # Ensure the column is of datetime type before calling min() and max()
+                    if pd.api.types.is_datetime64_any_dtype(data[col]):
+                        date_summary[col] = {
+                            'Earliest': data[col].min(),
+                            'Latest': data[col].max(),
+                            'Count': data[col].notna().sum()
+                        }
+                    else:
+                        date_summary[col] = {
+                            'Earliest': "Not a valid date column",
+                            'Latest': "Not a valid date column",
+                            'Count': data[col].notna().sum()
+                        }
+                return {"type": "table", "data": pd.DataFrame(date_summary).T}
+            else:
+                return {"type": "text", "data": "No date columns found in the dataset."}
+
+        else:  # If no specific mention of date, return summary of all columns
+            summary = {}
+            for col in data.columns:
+                if pd.api.types.is_numeric_dtype(data[col]):
+                    summary[col] = {
+                        'Count': data[col].count(),
+                        'Mean': data[col].mean(),
+                        'Median': data[col].median(),
+                        'Min': data[col].min(),
+                        'Max': data[col].max(),
+                        'Std Dev': data[col].std(),
+                        'Missing': data[col].isnull().sum()
+                    }
+                elif pd.api.types.is_datetime64_any_dtype(data[col]):
+                    summary[col] = {
+                        'Earliest': data[col].min(),
+                        'Latest': data[col].max(),
+                        'Count': data[col].notna().sum()
+                    }
+                else:  # For non-numeric columns (categorical or object type)
+                    summary[col] = {
+                        'Unique': data[col].nunique(),
+                        'Missing': data[col].isnull().sum(),
+                        'Top': data[col].mode()[0],
+                        'Freq': data[col].value_counts().iloc[0]
+                    }
+
+            # Convert the summary dictionary to a DataFrame for better formatting
+            summary_df = pd.DataFrame(summary).T
+            return {"type": "table", "data": summary_df}
+
+
 
     # If user asks for the total of a numeric column
     elif "total" in query or "sum" in query:
-        # Check if the query is asking about a numeric column
+        column_name = None
+        
+        # Try to match a numeric column mentioned in the query
         for col in data.select_dtypes(include=['number']).columns:
             if col.lower() in query:
-                total_amount = data[col].sum()  # Calculate the sum
-                return {"type": "text", "data": f"The total amount for {col} is {total_amount:.2f}."}
+                column_name = col
+                break
 
-    # If user asks for unique dates
-    elif "unique dates" in query:
-        column_name = "TRANS. DATE"  # Specify the correct column name for dates
-        if column_name in data.columns:  # Check if the specified column exists in the dataset
-            unique_dates = data[column_name].dropna().unique()  # Get unique dates in the specified column
-            return {"type": "text", "data": list(unique_dates)}
+        if column_name:
+            total_amount = data[column_name].sum()
+            return {"type": "text", "data": f"The total amount for '{column_name}' is {total_amount:.2f}."}
         else:
-            return {"type": "text", "data": f"Sorry, '{column_name}' column is not available in the dataset."}
+            return {"type": "text", "data": "Sorry, I couldn't find a numeric column related to your query."}
 
-    # If user asks about a specific date
-    elif "how many transactions happened on" in query.lower():
-        # Extract the date from the query (assuming format like '2025-01-01')
-        date_str = query.split("on")[-1].strip()  # Extract everything after 'on' and strip extra spaces
+       
+   # If the user asks for transactions on a specific date
+    elif "how many transactions" in query or "transactions happened on" in query:
+        # Extract date using regex
+        date_match = re.search(r"\b\d{4}-\d{2}-\d{2}\b", query)
+        if date_match:
+            date_in_query = date_match.group(0)
+        else:
+            return {"type": "text", "data": "Sorry, the date format is invalid. Please provide a valid date like 'YYYY-MM-DD'."}
 
-        # Strip both single and double quotes in one line, just in case.
-        date_str = date_str.replace("'", "").replace('"', '')
+        # Identify possible date columns dynamically
+        date_columns = [col for col in data.columns if "date" in col.lower()]
+        
+        if date_columns:
+            date_col = date_columns[0]  # Assuming the first detected date column
+            transactions_count = data[data[date_col] == date_in_query].shape[0]
+            return {"type": "text", "data": f"There were {transactions_count} transactions on {date_in_query}."}
+        else:
+            return {"type": "text", "data": "No date column found in the dataset."}
 
-        try:
-            # Convert the string date into a datetime object for comparison
-            date_obj = datetime.strptime(date_str, "%Y-%m-%d")
-        except ValueError:
-            return {"type": "text", "data": f"Sorry, the date format is invalid. Please provide a valid date like 'YYYY-MM-DD'. You entered: {date_str}"}
+    # Display the transactions that happened on the specified date
+    elif "display transactions on" in query or "transactions happened on" in query:
+        # Extract date using regex
+        date_match = re.search(r"\b\d{4}-\d{2}-\d{2}\b", query)
+        if date_match:
+            date_in_query = date_match.group(0)
+        else:
+            return {"type": "text", "data": "Sorry, the date format is invalid. Please provide a valid date like 'YYYY-MM-DD'."}
 
-        # Check if 'TRANS. DATE' column exists in the dataset
-        if "TRANS. DATE" in data.columns:
-            # Filter data for transactions that happened on the specified date
-            transactions_on_date = data[data["TRANS. DATE"] == date_obj]
-            transaction_count = len(transactions_on_date)
+        # Identify possible date columns dynamically
+        date_columns = [col for col in data.columns if "date" in col.lower()]
+        
+        if date_columns:
+            date_col = date_columns[0]  # Assuming the first detected date column
+            transactions_on_date = data[data[date_col] == date_in_query]
             
-            if transaction_count > 0:
-                return {"type": "text", "data": f"There were {transaction_count} transactions on {date_str}."}
+            # If there are transactions on that date, display them
+            if not transactions_on_date.empty:
+                transactions_data = transactions_on_date.to_dict(orient="records")
+                display_message = f"Here are the transactions on {date_in_query}:"
+                return {
+                    "type": "text",
+                    "data": f"{display_message}",
+                    "transactions": transactions_data
+                }
             else:
-                return {"type": "text", "data": f"Sorry, there were no transactions on {date_str}."}
+                return {"type": "text", "data": f"No transactions found on {date_in_query}."}
         else:
-            return {"type": "text", "data": "Sorry, 'TRANS. DATE' column is not available in the dataset."}
+            return {"type": "text", "data": "No date column found in the dataset."}
 
-    # If user asks for the count of unique dates in the "TRANS. DATE" column
+    # If user asks for the count of unique dates in the dataset
     elif "count of unique dates" in query or "how many unique dates" in query:
-        unique_dates_count = data["TRANS. DATE"].nunique()  # Count unique dates in the "TRANS. DATE" column
-        return {"type": "text", "data": f"There are {unique_dates_count} unique transaction dates."}
+        # Identify possible date columns dynamically
+        date_columns = [col for col in data.columns if "date" in col.lower()]
+        
+        if date_columns:
+            date_col = date_columns[0]
+            unique_dates_count = data[date_col].nunique()
+            return {"type": "text", "data": f"There are {unique_dates_count} unique transaction dates."}
+        else:
+            return {"type": "text", "data": "No date column found in the dataset."}
 
     # If user asks for the count of different values in the "TO TRANS TYPE" column
     elif "to trans type" in query and ("count" in query or "different" in query):
-        if "TO TRANS TYPE" in data.columns:
-            # Get the count of different "TO TRANS TYPE"
-            trans_type_counts = data["TO TRANS TYPE"].value_counts().reset_index()
-            trans_type_counts.columns = ["TO TRANS TYPE", "Count"]
+        trans_type_col = next((col for col in data.columns if "to trans type" in col.lower()), None)
+        if trans_type_col:
+            trans_type_counts = data[trans_type_col].value_counts().reset_index()
+            trans_type_counts.columns = [trans_type_col, "Count"]
             return {"type": "table", "data": trans_type_counts}
         else:
             return {"type": "text", "data": "'TO TRANS TYPE' column is not available in the dataset."}
 
+        return {"type": "text", "data": "Sorry, I couldn't process the query. Please try asking in a different way."}
+   
+    elif "time range" in query or "earliest" in query or "latest" in query:
+        # Identify potential date columns dynamically
+        date_columns = [col for col in data.columns if "date" in col.lower()]
+        
+        if date_columns:
+            # Convert all date columns to datetime (if not already in datetime format)
+            for col in date_columns:
+                data[col] = pd.to_datetime(data[col], errors='coerce')
+            
+            # Find the earliest and latest dates across all date columns
+            earliest_date = data[date_columns].min().min()  # Find the earliest date across all date columns
+            latest_date = data[date_columns].max().max()    # Find the latest date across all date columns
+            
+            return {"type": "text", "data": f"The earliest transaction date is {earliest_date.strftime('%Y-%m-%d')} and the latest transaction date is {latest_date.strftime('%Y-%m-%d')}."}
+        else:
+            return {"type": "text", "data": "No date columns found in the dataset."}
+    
+            
     # If user asks for the average of any numeric column
     elif "average" in query or "avg" in query:
         # Extract the column name from the query (search for specific column mentioned in the query)
