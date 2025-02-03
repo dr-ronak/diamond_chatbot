@@ -1,0 +1,39 @@
+General Questions:
+What are the column names in the dataset?
+How many rows are in the dataset?
+Are there any missing values in the dataset?
+What is the total amount (ACT_AMT) for all transactions?
+Can you provide the distribution of diamond types (DIAMOND_TYPE)?
+How many unique values are there for each column?
+
+Date and Time:
+What are the unique dates in the "TRANS. DATE" column?
+How many transactions happened on a specific date (e.g., "2025-01-01")?
+What is the time range (earliest and latest) of transaction dates (TRANS. DATE)?
+Can you show me the summary statistics for the "ACK DATE" and "ENTRY DATE"?
+Transaction and Entity Types:
+Can you show the count of different "TO TRANS TYPE" in the dataset?
+How many unique entities are there in the "FROM ENTITY TYPE" column?
+Show me the breakdown of "TO ENTITY TYPE" for each "FROM ENTITY TYPE".
+How many transactions have the "TO ENTITY" as "Diamond Manufacturer" ?
+
+Transaction Amounts and Weights:
+Can you provide the summary statistics for the "ACT_AMT" column?
+What is the total weight (CTS + RET CTS + LOSS CTS) for diamonds?
+What is the average price per carat (ACT_AMT divided by CTS)?
+Can you show the distribution of diamond weights (CTS)?
+Diamond Characteristics:
+What is the distribution of diamond cuts (CUT)?
+Show me the count of diamonds by clarity (CLA).
+What is the correlation between "CUT" and "POL" (polish)?
+Can you provide the unique values in "FLOUR" and their corresponding counts?
+
+Identification and References:
+How many unique "STONE_ID" are there in the dataset?
+							
+Other Specific Queries:
+Can you show me all transactions for a particular "COID" C003?
+What is the total loss (LOSS CTS) for diamonds in a specific "BRID" BR003?
+Show me all records with a specific "REPORT NO".
+						
+ 
